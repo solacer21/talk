@@ -84,6 +84,17 @@ def is_thai_lang(code: str) -> bool:
     c = (code or "").lower()
     return c.startswith("th")
 
+# 依文字內容粗略判斷是否像中文/泰文（避免偵測器失敗時退回 auto 導致私聊回中文）
+def looks_like_chinese(text: str) -> bool:
+    if not text:
+        return False
+    return re.search(r"[\u4e00-\u9fff]", text) is not None
+
+def looks_like_thai(text: str) -> bool:
+    if not text:
+        return False
+    return re.search(r"[\u0E00-\u0E7F]", text) is not None
+
 # 翻譯函式
 from translator import translate
 def translate_with_retry(text: str, target: str, src: str = "auto", retries: int = 3, wait: float = 0.8) -> str:
@@ -167,13 +178,17 @@ def handle_message(event):
     if source_type in ("group", "room"):
         out_lines = [f"[原文 {src}] {text}"]
 
+        # 先以內容特徵輔助判斷，避免偵測失敗時為 auto
+        src_like_cn = looks_like_chinese(text)
+        src_like_th = looks_like_thai(text)
+
         # 自訂目標：
         # - 中文輸入：只回覆英文、泰文
         # - 泰文輸入：只回覆英文、中文
         # - 其他語言：維持原本邏輯（翻譯到 TARGETS，排除來源語系與同屬中文族群）
-        if is_chinese_lang(src):
+        if is_chinese_lang(src) or src_like_cn:
             target_list = ["en", "th"]
-        elif is_thai_lang(src):
+        elif is_thai_lang(src) or src_like_th:
             target_list = ["en", "zh-TW"]
         else:
             target_list = []
@@ -196,10 +211,14 @@ def handle_message(event):
 
     # 私聊模式
     if source_type == "user":
+        # 先以內容特徵輔助判斷，避免偵測器回 auto 導致回到中文
+        src_like_cn = looks_like_chinese(text)
+        src_like_th = looks_like_thai(text)
+
         # 中文→回覆 英文+泰文；泰文→回覆 英文+中文；其他→沿用使用者偏好
-        if is_chinese_lang(src):
+        if is_chinese_lang(src) or src_like_cn:
             target_list = ["en", "th"]
-        elif is_thai_lang(src):
+        elif is_thai_lang(src) or src_like_th:
             target_list = ["en", "zh-TW"]
         else:
             target_list = [prefs.get(user_id, {}).get("target", DEFAULT_TARGET)]
