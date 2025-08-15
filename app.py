@@ -65,7 +65,8 @@ def normalize_lang(code: str) -> str:
 
 def safe_detect(text: str) -> str:
     t = (text or "").strip()
-    if len(re.sub(r"\W+", "", t)) < 2:
+    # 不要用 \W 過濾，否則中/日/韓/泰 全會被當作非字元而長度為 0
+    if len(t) < 2:
         return "auto"
     if re.search(r"https?://|www\.", t):
         return "auto"
@@ -73,6 +74,15 @@ def safe_detect(text: str) -> str:
         return detect(t)
     except Exception:
         return "auto"
+
+# 語言判斷輔助
+def is_chinese_lang(code: str) -> bool:
+    c = (code or "").lower()
+    return c.startswith("zh")
+
+def is_thai_lang(code: str) -> bool:
+    c = (code or "").lower()
+    return c.startswith("th")
 
 # 翻譯函式
 from translator import translate
@@ -156,9 +166,26 @@ def handle_message(event):
     # 群組翻譯模式
     if source_type in ("group", "room"):
         out_lines = [f"[原文 {src}] {text}"]
-        for tgt in TARGETS:
-            if tgt.lower().startswith(src.lower()):
-                continue
+
+        # 自訂目標：
+        # - 中文輸入：只回覆英文、泰文
+        # - 泰文輸入：只回覆英文、中文
+        # - 其他語言：維持原本邏輯（翻譯到 TARGETS，排除來源語系與同屬中文族群）
+        if is_chinese_lang(src):
+            target_list = ["en", "th"]
+        elif is_thai_lang(src):
+            target_list = ["en", "zh-TW"]
+        else:
+            target_list = []
+            for tgt in TARGETS:
+                if tgt.lower().startswith(src.lower()):
+                    continue
+                # 若來源與目標皆為中文族群，視為同語系而跳過
+                if is_chinese_lang(src) and tgt.lower().startswith("zh"):
+                    continue
+                target_list.append(tgt)
+
+        for tgt in target_list:
             try:
                 tr = translate_with_retry(text, target=tgt, src=src)
                 out_lines.append(f"[{tgt}] {tr}")
@@ -169,12 +196,22 @@ def handle_message(event):
 
     # 私聊模式
     if source_type == "user":
-        target = prefs.get(user_id, {}).get("target", DEFAULT_TARGET)
-        try:
-            tr = translate_with_retry(text, target=target, src=src)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"[{target}] {tr}"))
-        except Exception as e:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"翻譯失敗：{e}"))
+        # 中文→回覆 英文+泰文；泰文→回覆 英文+中文；其他→沿用使用者偏好
+        if is_chinese_lang(src):
+            target_list = ["en", "th"]
+        elif is_thai_lang(src):
+            target_list = ["en", "zh-TW"]
+        else:
+            target_list = [prefs.get(user_id, {}).get("target", DEFAULT_TARGET)]
+
+        out_lines = []
+        for tgt in target_list:
+            try:
+                tr = translate_with_retry(text, target=tgt, src=src)
+                out_lines.append(f"[{tgt}] {tr}")
+            except Exception as e:
+                out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
 
 if __name__ == "__main__":
     log.info(f"FANOUT_MODE={FANOUT_MODE} TARGETS={TARGETS}")
