@@ -91,6 +91,10 @@ def translate_with_retry(text: str, target: str, src: str = "auto", retries: int
 def health():
     return "ok", 200
 
+@app.get("/health")
+def health_probe():
+    return "ok", 200
+
 @app.post("/callback")
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
