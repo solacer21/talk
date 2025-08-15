@@ -181,6 +181,11 @@ def handle_message(event):
         # 先以內容特徵輔助判斷，避免偵測失敗時為 auto
         src_like_cn = looks_like_chinese(text)
         src_like_th = looks_like_thai(text)
+        src_effective = src
+        if src_like_cn:
+            src_effective = "zh-TW"
+        elif src_like_th:
+            src_effective = "th"
 
         # 自訂目標：
         # - 中文輸入：只回覆英文、泰文
@@ -202,7 +207,7 @@ def handle_message(event):
 
         for tgt in target_list:
             try:
-                tr = translate_with_retry(text, target=tgt, src=src)
+                tr = translate_with_retry(text, target=tgt, src=src_effective)
                 out_lines.append(f"[{tgt}] {tr}")
             except Exception as e:
                 out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
@@ -214,6 +219,11 @@ def handle_message(event):
         # 先以內容特徵輔助判斷，避免偵測器回 auto 導致回到中文
         src_like_cn = looks_like_chinese(text)
         src_like_th = looks_like_thai(text)
+        src_effective = src
+        if src_like_cn:
+            src_effective = "zh-TW"
+        elif src_like_th:
+            src_effective = "th"
 
         # 中文→回覆 英文+泰文；泰文→回覆 英文+中文；其他→沿用使用者偏好
         if is_chinese_lang(src) or src_like_cn:
@@ -226,7 +236,7 @@ def handle_message(event):
         out_lines = []
         for tgt in target_list:
             try:
-                tr = translate_with_retry(text, target=tgt, src=src)
+                tr = translate_with_retry(text, target=tgt, src=src_effective)
                 out_lines.append(f"[{tgt}] {tr}")
             except Exception as e:
                 out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
