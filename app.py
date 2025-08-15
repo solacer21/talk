@@ -108,6 +108,19 @@ def translate_with_retry(text: str, target: str, src: str = "auto", retries: int
             time.sleep(wait)
     raise last_err
 
+def robust_translate(text: str, target: str, src_primary: str) -> str:
+    """先用指定源語言翻，若輸出為空或與原文相同，改用 auto 再試。"""
+    try:
+        first = translate_with_retry(text, target=target, src=src_primary)
+        if not first or first.strip() == text.strip():
+            # 回退使用 auto 再試一次
+            second = translate_with_retry(text, target=target, src="auto")
+            return second
+        return first
+    except Exception:
+        # 若主流程錯誤，再以 auto 試一次
+        return translate_with_retry(text, target=target, src="auto")
+
 @app.get("/")
 def health():
     return "ok", 200
@@ -207,7 +220,7 @@ def handle_message(event):
 
         for tgt in target_list:
             try:
-                tr = translate_with_retry(text, target=tgt, src=src_effective)
+                tr = robust_translate(text, target=tgt, src_primary=src_effective)
                 out_lines.append(f"[{tgt}] {tr}")
             except Exception as e:
                 out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
@@ -236,7 +249,7 @@ def handle_message(event):
         out_lines = []
         for tgt in target_list:
             try:
-                tr = translate_with_retry(text, target=tgt, src=src_effective)
+                tr = robust_translate(text, target=tgt, src_primary=src_effective)
                 out_lines.append(f"[{tgt}] {tr}")
             except Exception as e:
                 out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
