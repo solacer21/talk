@@ -69,3 +69,36 @@ def translate(text: str, target_lang: str, src_lang: Optional[str] = "auto") -> 
 
     # 預設 fallback
     return GoogleTranslator(source=src_lang or "auto", target=target_lang).translate(text)
+
+# === 新增在 translator.py 最底部 ===
+from deep_translator import GoogleTranslator
+import re, time, random
+
+def safe_google_translate(text: str, target: str, src: str = "auto", retries: int = 3) -> str:
+    """
+    ✅ 簡化版容錯翻譯：
+    - 若翻譯結果為空或與原文相同，自動改用 auto 重翻
+    - 自動重試 3 次（含隨機退避）
+    """
+    def is_bad_result(src_text, out):
+        if not out:
+            return True
+        if out.strip() == src_text.strip():
+            return True
+        if len(out) < len(src_text) * 0.4:
+            return True
+        return False
+
+    last_err = None
+    for _ in range(retries):
+        try:
+            result = GoogleTranslator(source=src, target=target).translate(text)
+            if is_bad_result(text, result):
+                result = GoogleTranslator(source="auto", target=target).translate(text)
+            return result.strip()
+        except Exception as e:
+            last_err = e
+            time.sleep(0.8 + random.random())
+    raise RuntimeError(f"safe_google_translate failed: {last_err}")
+
+    
