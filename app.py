@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, JoinEvent
 from langdetect import detect, DetectorFactory
+from translator import safe_google_translate
 
 # ── 基本設定 ──────────────────────────────────────────
 load_dotenv()
@@ -218,14 +219,16 @@ def handle_message(event):
                     continue
                 target_list.append(tgt)
 
-        for tgt in target_list:
-            try:
-                tr = robust_translate(text, target=tgt, src_primary=src_effective)
-                out_lines.append(f"[{tgt}] {tr}")
-            except Exception as e:
-                out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
-        return
+       for tgt in target_list:
+           try:
+               tr = safe_google_translate(text, target=tgt, src=src_effective)
+               out_lines.append(f"[{tgt}] {tr}")
+           except Exception as e:
+               out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
+
+line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
+return
+
 
     # 私聊模式
     if source_type == "user":
