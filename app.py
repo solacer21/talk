@@ -7,7 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, JoinEvent
 from langdetect import detect, DetectorFactory
-from translator import safe_google_translate
+from translator import safe_google_translate, translate
 
 # ── 基本設定 ──────────────────────────────────────────
 load_dotenv()
@@ -27,7 +27,7 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# 偏好語言儲存（支援以環境變數 PREF_PATH 指定雲端磁碟掛載路徑）
+# 偏好語言儲存
 PREF_PATH = Path(os.getenv("PREF_PATH", "user_langs.json"))
 if not PREF_PATH.exists():
     PREF_PATH.write_text("{}", encoding="utf-8")
@@ -52,6 +52,7 @@ HELP_TEXT = (
     f"目前群組模式：{FANOUT_MODE}；群組翻譯語言：{', '.join(TARGETS)}"
 )
 
+# ── 語言與翻譯相關函式 ───────────────────────────────
 def normalize_lang(code: str) -> str:
     if not code:
         return DEFAULT_TARGET
@@ -66,7 +67,6 @@ def normalize_lang(code: str) -> str:
 
 def safe_detect(text: str) -> str:
     t = (text or "").strip()
-    # 不要用 \W 過濾，否則中/日/韓/泰 全會被當作非字元而長度為 0
     if len(t) < 2:
         return "auto"
     if re.search(r"https?://|www\.", t):
@@ -76,7 +76,6 @@ def safe_detect(text: str) -> str:
     except Exception:
         return "auto"
 
-# 語言判斷輔助
 def is_chinese_lang(code: str) -> bool:
     c = (code or "").lower()
     return c.startswith("zh")
@@ -85,7 +84,6 @@ def is_thai_lang(code: str) -> bool:
     c = (code or "").lower()
     return c.startswith("th")
 
-# 依文字內容粗略判斷是否像中文/泰文（避免偵測器失敗時退回 auto 導致私聊回中文）
 def looks_like_chinese(text: str) -> bool:
     if not text:
         return False
@@ -96,8 +94,6 @@ def looks_like_thai(text: str) -> bool:
         return False
     return re.search(r"[\u0E00-\u0E7F]", text) is not None
 
-# 翻譯函式
-from translator import translate
 def translate_with_retry(text: str, target: str, src: str = "auto", retries: int = 3, wait: float = 0.8) -> str:
     last_err = None
     for i in range(retries + 1):
@@ -110,18 +106,16 @@ def translate_with_retry(text: str, target: str, src: str = "auto", retries: int
     raise last_err
 
 def robust_translate(text: str, target: str, src_primary: str) -> str:
-    """先用指定源語言翻，若輸出為空或與原文相同，改用 auto 再試。"""
     try:
         first = translate_with_retry(text, target=target, src=src_primary)
         if not first or first.strip() == text.strip():
-            # 回退使用 auto 再試一次
             second = translate_with_retry(text, target=target, src="auto")
             return second
         return first
     except Exception:
-        # 若主流程錯誤，再以 auto 試一次
         return translate_with_retry(text, target=target, src="auto")
 
+# ── 健康檢查 ─────────────────────────────────────────
 @app.get("/")
 def health():
     return "ok", 200
@@ -130,6 +124,7 @@ def health():
 def health_probe():
     return "ok", 200
 
+# ── LINE Callback ─────────────────────────────────────
 @app.post("/callback")
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
@@ -140,6 +135,7 @@ def callback():
         abort(400)
     return "OK"
 
+# ── 事件處理 ─────────────────────────────────────────
 @handler.add(JoinEvent)
 def handle_join(event):
     welcome = (
@@ -188,11 +184,10 @@ def handle_message(event):
     if DEBUG_FLAG:
         log.info(f"recv type={source_type} src={src} text='{text[:40]}'...")
 
-    # 群組翻譯模式
+    # ── 群組翻譯模式 ─────────────────────────────
     if source_type in ("group", "room"):
         out_lines = [f"[原文 {src}] {text}"]
 
-        # 先以內容特徵輔助判斷，避免偵測失敗時為 auto
         src_like_cn = looks_like_chinese(text)
         src_like_th = looks_like_thai(text)
         src_effective = src
@@ -201,10 +196,6 @@ def handle_message(event):
         elif src_like_th:
             src_effective = "th"
 
-        # 自訂目標：
-        # - 中文輸入：只回覆英文、泰文
-        # - 泰文輸入：只回覆英文、中文
-        # - 其他語言：維持原本邏輯（翻譯到 TARGETS，排除來源語系與同屬中文族群）
         if is_chinese_lang(src) or src_like_cn:
             target_list = ["en", "th"]
         elif is_thai_lang(src) or src_like_th:
@@ -214,25 +205,22 @@ def handle_message(event):
             for tgt in TARGETS:
                 if tgt.lower().startswith(src.lower()):
                     continue
-                # 若來源與目標皆為中文族群，視為同語系而跳過
                 if is_chinese_lang(src) and tgt.lower().startswith("zh"):
                     continue
                 target_list.append(tgt)
 
-       for tgt in target_list:
-           try:
-               tr = safe_google_translate(text, target=tgt, src=src_effective)
-               out_lines.append(f"[{tgt}] {tr}")
-           except Exception as e:
-               out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
+        for tgt in target_list:
+            try:
+                tr = safe_google_translate(text, target=tgt, src=src_effective)
+                out_lines.append(f"[{tgt}] {tr}")
+            except Exception as e:
+                out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
 
-line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
-return
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
+        return
 
-
-    # 私聊模式
+    # ── 私聊模式 ───────────────────────────────
     if source_type == "user":
-        # 先以內容特徵輔助判斷，避免偵測器回 auto 導致回到中文
         src_like_cn = looks_like_chinese(text)
         src_like_th = looks_like_thai(text)
         src_effective = src
@@ -241,7 +229,6 @@ return
         elif src_like_th:
             src_effective = "th"
 
-        # 中文→回覆 英文+泰文；泰文→回覆 英文+中文；其他→沿用使用者偏好
         if is_chinese_lang(src) or src_like_cn:
             target_list = ["en", "th"]
         elif is_thai_lang(src) or src_like_th:
@@ -256,8 +243,11 @@ return
                 out_lines.append(f"[{tgt}] {tr}")
             except Exception as e:
                 out_lines.append(f"[{tgt}] <翻譯失敗: {e}>")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
 
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="\n".join(out_lines)))
+        return
+
+# ── 啟動入口 ─────────────────────────────────────────
 if __name__ == "__main__":
     log.info(f"FANOUT_MODE={FANOUT_MODE} TARGETS={TARGETS}")
     port = int(os.getenv("PORT", 5000))
